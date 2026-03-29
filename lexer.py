@@ -17,7 +17,9 @@ reserved = {
     'END': 'END',
     'FUNCTION': 'FUNCTION', # Para a etapa de valorização
     'RETURN': 'RETURN',     # Para a etapa de valorização
-    'MOD': 'MOD'            # Função embutida usada nos exemplos
+    'MOD': 'MOD',       # Função embutida usada nos exemplos
+    'SUBROUTINE': 'SUBROUTINE', # Para a etapa de valorização
+    'CALL': 'CALL'      # Para a etapa de valorização
 }
 
 tokens = [
@@ -99,25 +101,3 @@ def t_error(t):
 
 # Cria o analisador léxico
 lexer = lex.lex()
-
-if __name__ == '__main__':
-    # Este é o Exemplo 1 do guião, guardado numa string para teste rápido
-    codigo_teste = '''
-    PROGRAM HELLO
-    PRINT *, 'ola, Mundo!'
-    END
-    '''
-
-    # Alimentar o nosso lexer com o código de teste
-    lexer.input(codigo_teste)
-
-    # Ciclo para pedir ao lexer os tokens um a um até acabar
-    print("A iniciar a Análise Léxica...")
-    print("-" * 30)
-
-    for token in lexer:
-        # Imprime o tipo do token, o valor capturado, a linha e a posição
-        print(f"Tipo: {token.type:8} | Valor: {token.value}")
-
-    print("-" * 30)
-    print("Análise Léxica concluída!")

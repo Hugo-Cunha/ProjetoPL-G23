@@ -9,6 +9,7 @@ class CodeGenerator:
         self.label_counter = 0
         self.do_contexts = {}
         self.arrays = {}
+        self._while_labels_emitted = set()
 
     def new_label(self):
         self.label_counter += 1
@@ -69,6 +70,36 @@ class CodeGenerator:
             # Procura variáveis dentro dos blocos internos
             for element in node[1:]:
                 self.scan_memory(element, current_scope)
+
+    def _is_while_pattern(self, label_num, stmt):
+        """
+        Verifica se um nó 'label' representa o padrão while do Fortran 77:
+            N IF (cond) THEN
+                ...corpo...
+                GOTO N
+            ENDIF
+        Se sim, devolve (cond, corpo_sem_goto). Caso contrário, devolve None.
+        """
+        if stmt[0] not in ('if', 'if_else'):
+            return None
+
+        # Só tratamos IF sem ELSE como while (IF com ELSE é outra coisa)
+        if stmt[0] == 'if_else':
+            return None
+
+        cond = stmt[1]
+        body = stmt[2]  # lista de statements dentro do IF
+
+        if not isinstance(body, list) or len(body) == 0:
+            return None
+
+        last = body[-1]
+        # O último statement do corpo tem de ser GOTO N (o mesmo label)
+        if last[0] == 'goto' and last[1] == label_num:
+            body_sem_goto = body[:-1]
+            return (cond, body_sem_goto)
+
+        return None
 
     # PASSAGEM 2: GERAÇÃO DE CÓDIGO
     def generate(self, node, current_scope=''):
@@ -176,6 +207,19 @@ class CodeGenerator:
         elif node_type == 'number':
             # Nó: ('number', valor)
             self.code.append(f"pushi {node[1]}")
+
+        elif node_type == 'real':
+            self.code.append(f"pushf {node[1]}")
+
+        elif node_type == 'uminus':
+            inner = node[1]
+            # Otimização inline: se o filho é uma constante, já gera o número negativo diretamente
+            if inner[0] == 'number':
+                self.code.append(f"pushi {-inner[1]}")
+            else:
+                self.generate(inner, current_scope)
+                self.code.append("pushi -1")
+                self.code.append("mul")
 
         elif node_type == 'binop':
             # Nó: ('binop', operador, lado_esquerdo, lado_direito)
@@ -307,18 +351,40 @@ class CodeGenerator:
             self.code.append(f"L{lbl_num}:")
             self.generate(stmt, current_scope)
 
-            # --- CICLO DO ---
-            if lbl_num in self.do_contexts:
-                ctx = self.do_contexts.pop(lbl_num)
+            # --- CICLO PADRAO WHILE ---
+            while_match = self._is_while_pattern(lbl_num, stmt)
+            if while_match and lbl_num not in self._while_labels_emitted:
+                cond, body = while_match
+                self._while_labels_emitted.add(lbl_num)
+                while_start = f"L{lbl_num}"
+                while_end = self.new_label()
 
-                self.code.append(f"pushg {self.get_addr(current_scope, ctx['var'])}")
-                self.code.append("pushi 1")
-                self.code.append("add")
-                self.code.append(f"storeg {self.get_addr(current_scope, ctx['var'])}")
+                self.code.append(f"{while_start}:")
+                self.generate(cond, current_scope)
+                self.code.append(f"jz {while_end}")
+                self.generate(body, current_scope)
+                self.code.append(f"jump {while_start}")
+                self.code.append(f"{while_end}:")
+            elif while_match and lbl_num in self._while_labels_emitted:
+                pass
 
-                self.code.append(f"jump {ctx['start_lbl']}")
+            else:
+                # Comportamento normal: emite o label e o statement
+                self.code.append(f"L{lbl_num}:")
+                self.generate(stmt, current_scope)
 
-                self.code.append(f"{ctx['end_lbl']}:")
+                # Se há um ciclo DO à espera deste label, fecha-o aqui
+                if lbl_num in self.do_contexts:
+                    ctx = self.do_contexts.pop(lbl_num)
+                    # Incrementa a variável de controlo
+                    self.code.append(f"pushg {self.get_addr(current_scope, ctx['var'])}")
+                    step = ctx.get('step', 1)
+                    self.code.append(f"pushi {step}")
+                    self.code.append("add")
+                    self.code.append(f"storeg {self.get_addr(current_scope, ctx['var'])}")
+                    # Volta ao início do ciclo
+                    self.code.append(f"jump {ctx['start_lbl']}")
+                    self.code.append(f"{ctx['end_lbl']}:")
 
         elif node_type == 'do':
             # Nó: ('do', label_destino, variavel, inicio, fim)
@@ -348,6 +414,35 @@ class CodeGenerator:
             skip_lbl = self.new_label()
             self.code.append(f"jz {skip_lbl}")  # Se for 0 (var <= fim), salta a instrução de paragem
             self.code.append(f"jump {end_lbl}")  # Se for 1, o ciclo acabou!
+            self.code.append(f"{skip_lbl}:")
+
+        elif node_type == 'do_step':
+            # Nó: ('do_step', label, var, inicio, fim, passo)
+            lbl_num, var_name = node[1], node[2]
+            start_expr, end_expr, step_expr = node[3], node[4], node[5]
+
+            start_lbl = self.new_label()
+            end_lbl = self.new_label()
+
+            # O passo pode ser uma expressão, mas para o contexto do DO guardamos o nó para emitir código na altura do incremento
+            self.do_contexts[lbl_num] = {
+                'var': var_name,
+                'start_lbl': start_lbl,
+                'end_lbl': end_lbl,
+                'step_expr': step_expr,
+                'step': None,
+                'current_scope': current_scope
+            }
+
+            self.generate(start_expr, current_scope)
+            self.code.append(f"storeg {self.get_addr(current_scope, var_name)}")
+            self.code.append(f"{start_lbl}:")
+            self.code.append(f"pushg {self.get_addr(current_scope, var_name)}")
+            self.generate(end_expr, current_scope)
+            self.code.append("sup")
+            skip_lbl = self.new_label()
+            self.code.append(f"jz {skip_lbl}")
+            self.code.append(f"jump {end_lbl}")
             self.code.append(f"{skip_lbl}:")
 
         elif node_type == 'continue':

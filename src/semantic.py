@@ -1,17 +1,20 @@
 class SemanticAnalyzer:
     def __init__(self):
-        self.functions = {}
-        self.errors = []
-        self.reset_local_scope()
+        self.functions = {} # Dicionário para armazenar as funções e subrotinas definidas, com seus tipos e número de parâmetros.
+        self.errors = [] # Lista de erros semânticos encontrados durante a análise.
+        self.reset_local_scope() # Inicializa a tabela de símbolos e os conjuntos de variáveis e labels usados.
+        self.symbol_table = {}  # Variáveis declaradas no escopo atual (função ou programa)
+        self.used_vars = set()
+        self.expected_do_labels = set()
+        self.expected_goto_labels = set()
+        self.found_all_labels = set()
+        self.found_continue_labels = set()
 
     def reset_local_scope(self):
         """Limpa as variáveis e os labels locais ao entrar num novo bloco de código."""
         self.symbol_table = {}
         self.used_vars = set()
         self.expected_do_labels = set()
-        self.expected_goto_labels = set()
-        self.found_continue_labels = set()
-        self.found_all_labels = set()
 
     def analyze(self, node):
         """Função recursiva que percorre a AST"""
@@ -33,7 +36,6 @@ class SemanticAnalyzer:
 
         if node_type == 'compilation_unit':
             # Percorre o Programa e as Funções
-            for unit in node[1]:
                 for unit in node[1]:
                     if unit[0] == 'function':
                         func_type, func_name, params = unit[1], unit[2], unit[3]
@@ -73,16 +75,21 @@ class SemanticAnalyzer:
         elif node_type == 'func_call':
             # node = ('func_call', nome_funcao, lista_argumentos)
             func_name, args = node[1], node[2]
-
-            if func_name in self.symbol_table and isinstance(self.symbol_table[func_name], tuple):
-                self.analyze(args[0])  # Analisa apenas a expressão do índice
-
+            scoped_key = func_name
+            if scoped_key in self.symbol_table and isinstance(self.symbol_table[scoped_key], tuple) and \
+                    self.symbol_table[scoped_key][0] == 'ARRAY':
+                # É um acesso a array — verifica só o índice
+                if len(args) != 1:
+                    self.errors.append(f"Erro Semântico: Acesso ao array '{func_name}' com número errado de índices.")
+                else:
+                    self.analyze(args[0])
             else:
+                # É uma chamada a função real
                 if func_name not in self.functions:
                     self.errors.append(f"Erro Semântico: Chamada a função não definida '{func_name}'.")
                 elif len(args) != self.functions[func_name]['num_params']:
                     self.errors.append(
-                        f"Erro Semântico: A função '{func_name}' esperava {self.functions[func_name]['num_params']} argumentos.")
+                        f"Erro Semântico: A função '{func_name}' esperava {self.functions[func_name]['num_params']} argumentos, mas recebeu {len(args)}.")
                 for arg in args:
                     self.analyze(arg)
 
@@ -111,6 +118,8 @@ class SemanticAnalyzer:
             for item in node[2]:
                 if item[0] == 'id':
                     var_name = item[1]
+                    if var_name in self.functions:
+                        pass
                     self.symbol_table[var_name] = var_type
                 elif item[0] == 'array':
                     var_name, size = item[1], item[2]
@@ -125,6 +134,25 @@ class SemanticAnalyzer:
                 self.errors.append(f"Erro Semântico: Atribuição a variável não declarada '{var_name}'.")
             # Temos de analisar a expressão do lado direito também (pode ter variáveis lá dentro)
             self.analyze(node[2])
+
+        elif node_type == 'assign_array':
+            # node = ('assign_array', nome_array, indice, valor)
+            var_name, index_expr, value_expr = node[1], node[2], node[3]
+            if var_name not in self.symbol_table:
+                self.errors.append(f"Erro Semântico: Atribuição a array não declarado '{var_name}'.")
+            elif not (isinstance(self.symbol_table[var_name], tuple) and self.symbol_table[var_name][0] == 'ARRAY'):
+                self.errors.append(f"Erro Semântico: '{var_name}' não é um array.")
+            self.analyze(index_expr)
+            self.analyze(value_expr)
+
+        elif node_type == 'read_array':
+            # node = ('read_array', nome_array, indice)
+            var_name, index_expr = node[1], node[2]
+            if var_name not in self.symbol_table:
+                self.errors.append(f"Erro Semântico: READ para array não declarado '{var_name}'.")
+            elif not (isinstance(self.symbol_table[var_name], tuple) and self.symbol_table[var_name][0] == 'ARRAY'):
+                self.errors.append(f"Erro Semântico: '{var_name}' não é um array (usado como array em READ).")
+            self.analyze(index_expr)
 
         elif node_type == 'id':
             # node = ('id', nome_variavel) -> Usado dentro de contas e expressões
@@ -161,11 +189,9 @@ class SemanticAnalyzer:
             self.analyze(node[3])
             self.analyze(node[4])
 
-
         elif node_type == 'goto':
             # node = ('goto', label_num)
             self.expected_goto_labels.add(node[1])
-
 
         elif node_type == 'label':
             # node = ('label', num_label, statement)
@@ -188,10 +214,3 @@ class SemanticAnalyzer:
             if label not in self.found_all_labels:
                 self.errors.append(
                     f"Erro Semântico: O comando GOTO tenta saltar para o label {label}, mas essa linha não existe.")
-
-    def report_warnings(self, scope_name):
-        """Imprime avisos sobre variáveis inúteis."""
-        for var in self.symbol_table:
-            # Não avisamos sobre o nome da função (que é a var de retorno) nem parâmetros UNKNOWN
-            if var != scope_name and var not in self.used_vars and self.symbol_table[var] != 'UNKNOWN':
-                print(f" [!] Warning: Variável '{var}' no bloco '{scope_name}' declarada mas nunca utilizada.")

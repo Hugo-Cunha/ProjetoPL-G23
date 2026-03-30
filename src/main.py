@@ -2,6 +2,8 @@ from parser import parser
 from semantic import SemanticAnalyzer
 from codegen import CodeGenerator
 from otimizador import Otimizador
+from lexer import preprocessar
+
 
 def compilar(codigo_fonte):
     print("=" * 50)
@@ -10,6 +12,7 @@ def compilar(codigo_fonte):
 
     # 1. FASE SINTÁTICA (que já chama o lexer automaticamente)
     print("\n[1/3] A executar Análise Sintática...")
+    codigo_fonte = preprocessar(codigo_fonte)
     ast = parser.parse(codigo_fonte)
 
     if not ast:

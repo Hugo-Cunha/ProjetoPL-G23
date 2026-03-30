@@ -8,6 +8,7 @@ precedence = (
     ('left', 'EQ', 'NE', 'LT', 'LE', 'GT', 'GE'),
     ('left', 'PLUS', 'MINUS'),
     ('left', 'TIMES', 'DIVIDE'),
+    ('right', 'UMINUS')
 )
 
 def p_compilation_unit(p):
@@ -88,10 +89,24 @@ def p_statement_do(p):
     # Estrutura: DO label variavel = inicio, fim (ex: DO 10 I = 1, N)
     p[0] = ('do', p[2], p[3], p[5], p[7])
 
+def p_statement_do_step(p):
+    '''statement : DO NUMBER ID EQUALS expression COMMA expression COMMA expression'''
+    p[0] = ('do_step', p[2], p[3], p[5], p[7], p[9])
+
 def p_statement_labeled(p):
     '''statement : NUMBER statement'''
     p[0] = ('label', p[1], p[2])
 
+# O comando RETURN é exclusivo dentro de funções/subrotinas
+def p_statement_return(p):
+    '''statement : RETURN'''
+    p[0] = ('return',)
+
+def p_statement_decl(p):
+    '''statement : type id_list'''
+    p[0] = ('declare', p[1], p[2])
+
+# ================= PRINT E EXPRESSIONS DE PRINT =================
 def p_statement_print(p):
     '''statement : PRINT TIMES COMMA print_list
                  | PRINT COMMA print_list'''
@@ -131,11 +146,6 @@ def p_param_list_empty(p):
     '''param_list : '''
     p[0] = []
 
-# O comando RETURN é exclusivo dentro de funções/subrotinas
-def p_statement_return(p):
-    '''statement : RETURN'''
-    p[0] = ('return',)
-
 # ================= TYPE E LIST =================
 def p_type(p):
     '''type : INTEGER
@@ -159,11 +169,6 @@ def p_id_list(p):
         p[0] = [p[1]]
     else:
         p[0] = p[1] + [p[3]]
-
-# Regra para Declaração de Variáveis (ex: INTEGER N, I, FAT)
-def p_statement_decl(p):
-    '''statement : type id_list'''
-    p[0] = ('declare', p[1], p[2])
 
 # ================= ATRIBUIÇÃO E LEITURA DE ARRAYS =================
 
@@ -230,6 +235,10 @@ def p_expression_func_call(p):
 def p_expression_mod_call(p):
     '''expression : MOD LPAREN expression COMMA expression RPAREN'''
     p[0] = ('mod_call', p[3], p[5])
+
+def p_expression_uminus(p):
+    '''expression : MINUS expression %prec UMINUS'''
+    p[0] = ('uminus', p[2])
 
 def p_arg_list_multiple(p):
     '''arg_list : arg_list COMMA expression'''

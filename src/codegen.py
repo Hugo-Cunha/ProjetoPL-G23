@@ -1,4 +1,5 @@
 # codegen.py
+# Gerador de código para Fortran 77 → EWVM
 
 class CodeGenerator:
     def __init__(self):

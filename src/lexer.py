@@ -1,11 +1,12 @@
 # lexer.py
+# Inpirado por Humberto Gomes (2023)
 # Analisador Léxico para Fortran 77 (formato livre) orientado a objetos
 
 import ply.lex as lex
 
 
 class Lexer:
-    # 1. As palavras reservadas e os tokens têm de estar ao nível da classe
+    # As palavras reservadas e os tokens têm de estar ao nível da classe
     reserved = {
         'PROGRAM': 'PROGRAM',
         'INTEGER': 'INTEGER',
@@ -34,7 +35,7 @@ class Lexer:
                  'TRUE', 'FALSE', 'AND', 'OR', 'NOT', 'EQ', 'NE', 'LT', 'LE', 'GT', 'GE',
              ] + list(reserved.values())
 
-    # 2. As expressões regulares simples também ficam ao nível da classe
+    # As expressões regulares simples também ficam ao nível da classe
     t_PLUS = r'\+'
     t_MINUS = r'-'
     t_TIMES = r'\*'
@@ -53,7 +54,7 @@ class Lexer:
         # O módulo 'self' diz ao PLY para procurar as regras dentro desta instância!
         self.lexer = lex.lex(module=self)
 
-    # 3. Todos os métodos ganham o parâmetro 'self'
+    # Todos os métodos ganham o parâmetro 'self'
     def t_TRUE(self, t):
         r'\.TRUE\.'
         return t

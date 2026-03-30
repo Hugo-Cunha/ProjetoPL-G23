@@ -1,10 +1,11 @@
 # parser.py
+# Analisador Sintático para Fortran 77 (formato livre) orientado a objetos
 import ply.yacc as yacc
 from lexer import Lexer
 
 
 class Parser:
-    # 1. Os tokens e a precedência têm de ser atributos da classe!
+    # Os tokens e a precedência têm de ser atributos da classe!
     tokens = Lexer.tokens
 
     precedence = (
@@ -18,7 +19,7 @@ class Parser:
     )
 
     def __init__(self):
-        # 2. Inicializamos o parser dizendo-lhe para procurar as regras no 'self'
+        # Inicializamos o parser dizendo-lhe para procurar as regras no 'self'
         self.parser = yacc.yacc(module=self)
 
     # Método utilitário para facilitar o uso no main.py

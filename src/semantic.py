@@ -1,3 +1,7 @@
+# semantic.py
+# Analisador Semântico para Fortran 77 (formato livre) orientado a objetos
+#
+
 class SemanticAnalyzer:
     def __init__(self):
         self.functions = {}

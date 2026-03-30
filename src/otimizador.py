@@ -1,3 +1,6 @@
+# otimizador.py
+# Otimizador de AST para Fortran 77 → EWVM
+
 class Otimizador:
     _OPOSTO = {
         '.EQ.': '.NE.', '.NE.': '.EQ.',

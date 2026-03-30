@@ -1,8 +1,8 @@
-from parser import parser
+from parser import Parser
 from semantic import SemanticAnalyzer
 from codegen import CodeGenerator
 from otimizador import Otimizador
-from lexer import preprocessar
+from lexer import Lexer
 
 
 def compilar(codigo_fonte):
@@ -12,8 +12,10 @@ def compilar(codigo_fonte):
 
     # 1. FASE SINTÁTICA (que já chama o lexer automaticamente)
     print("\n[1/3] A executar Análise Sintática...")
-    codigo_fonte = preprocessar(codigo_fonte)
-    ast = parser.parse(codigo_fonte)
+    meu_lexer = Lexer()
+    meu_parser = Parser()
+    codigo_fonte = meu_lexer.preprocessar(codigo_fonte)
+    ast = meu_parser.parse(codigo_fonte, lexer=meu_lexer.lexer)
 
     if not ast:
         print("\n[!] Erro Crítico: A compilação falhou na fase sintática. Abortando.")

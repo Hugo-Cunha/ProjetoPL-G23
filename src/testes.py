@@ -10,11 +10,11 @@
 
 #   - Métricas: nº de instruções poupadas, quais instruções mudaram
 
-from parser import parser
+from parser import Parser
 from semantic import SemanticAnalyzer
 from codegen import CodeGenerator
 from otimizador import Otimizador
-from lexer import preprocessar
+from lexer import Lexer
 
 # MOTOR DE COMPILAÇÃO
 
@@ -24,7 +24,9 @@ def compilar(codigo_fonte, otimizar=True, verbose=False):
     Retorna (codigo_vm: str, sucesso: bool).
     otimizar=False → salta a fase de otimização (para comparação).
     """
-    codigo = preprocessar(codigo_fonte)
+    lexer = Lexer()
+    parser = Parser()
+    codigo = lexer.preprocessar(codigo_fonte)
     ast = parser.parse(codigo)
     if not ast:
         return None, False

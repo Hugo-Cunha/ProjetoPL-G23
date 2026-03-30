@@ -23,6 +23,7 @@ class Otimizador:
         node_type = node[0]
 
         if node_type == 'binop':
+            # node = ('binop', op, left, right)
             op = node[1]
             left = self.optimize(node[2])
             right = self.optimize(node[3])
@@ -58,6 +59,7 @@ class Otimizador:
             return ('binop', op, left, right)
 
         elif node_type == 'uminus':
+            # node = ('uminus', inner)
             inner = self.optimize(node[1])
             # Dobrar o sinal: --X → X
             if inner[0] == 'uminus':
@@ -68,8 +70,8 @@ class Otimizador:
             return ('uminus', inner)
 
         elif node_type == 'not':
+            # node = ('not', inner)
             inner = self.optimize(node[1])
-            # Negação de booleanos constantes
             # NOT(NOT x) → x
             if inner[0] == 'not':
                 return inner[1]
@@ -88,6 +90,7 @@ class Otimizador:
             return ('not', inner)
 
         elif node_type == 'if':
+            # node = ('if', cond, then)
             cond = self.optimize(node[1])
             if cond == ('bool', '.TRUE.'):
                 return self.optimize(node[2])
@@ -96,6 +99,7 @@ class Otimizador:
             return ('if', cond, self.optimize(node[2]))
 
         elif node_type == 'if_else':
+            # node = ('if_else', cond, then, else)
             cond = self.optimize(node[1])
             if cond == ('bool', '.TRUE.'): return self.optimize(node[2])
             if cond == ('bool', '.FALSE.'): return self.optimize(node[3])

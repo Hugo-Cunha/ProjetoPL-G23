@@ -1,404 +1,407 @@
-# codegen.py
-# Gerador de código para Fortran 77 → EWVM
+# codegen.py — Gerador de Código para a EWVM (European Web Virtual Machine)
+
+# Duas passagens:
+#   1. scan_memory — percorre a AST e aloca endereços de memória para todas as variáveis
+#   2. generate    — percorre a AST e emite instruções EWVM
+
+# Padrão WHILE: deteção de  N IF(cond) THEN ... GOTO N ENDIF
+# e geração de ciclo estruturado em vez de labels/jumps avulsos.
+
 
 class CodeGenerator:
-    def __init__(self):
-        self.code = []
-        self.var_addresses = {}
-        self.var_count = 0
-        self.functions = {}
-        self.label_counter = 0
-        self.do_contexts = {}
-        self.arrays = {}
-        self._while_labels_done = set()
 
-    def new_label(self):
+    def __init__(self):
+        self.code:          list  = []
+        self.var_addresses: dict  = {}   # "scope_varname" - endereço global
+        self.var_count:     int   = 0
+        self.functions:     dict  = {}   # nome → lista de parâmetros
+        self.label_counter: int   = 0
+        self.do_contexts:   dict  = {}   # label_fortran - contexto do DO
+        self.arrays:        dict  = {}   # "scope_varname" - tamanho
+        self._while_done:   set   = set()  # labels já emitidos como while
+
+    # Utilitários
+
+    def _new_label(self) -> str:
         self.label_counter += 1
         return f"L{self.label_counter}"
 
-    def get_addr(self, scope, var_name):
-        return self.var_addresses[f"{scope}_{var_name}"]
+    def _addr(self, scope: str, var: str) -> int:
+        return self.var_addresses[f"{scope}_{var}"]
 
-    # PASSAGEM 1: ALOCAÇÃO DE MEMÓRIA
-    def scan_memory(self, node, current_scope=''):
+    def _emit(self, *instructions: str):
+        self.code.extend(instructions)
+
+    # PASSAGEM 1 — ALOCAÇÃO DE MEMÓRIA
+
+    def scan_memory(self, node, scope: str = ''):
         if node is None: return
         if isinstance(node, list):
-            for n in node: self.scan_memory(n, current_scope)
+            for n in node: self.scan_memory(n, scope)
             return
         if not isinstance(node, tuple): return
 
-        t = node[0]
-        if t == 'compilation_unit':
-            # Alocar memória para todas as variáveis globais (variáveis do programa principal)
-            for u in node[1]: self.scan_memory(u)
+        kind = node[0]
+        scanner = getattr(self, f'_scan_{kind}', self._scan_recurse)
+        scanner(node, scope)
 
-        elif t == 'program':
-            # Programa principal: PROGRAM NOME + corpo
-            self.scan_memory(node[2], node[1])
+    def _scan_recurse(self, node, scope):
+        for child in node[1:]:
+            self.scan_memory(child, scope)
 
-        elif t == 'function':
-            # Funções: FUNCTION NOME(params) + corpo + return
-            func_name, params, stmts = node[2], node[3], node[4]
-            self.functions[func_name] = params
-            self.var_addresses[f"{func_name}_{func_name}"] = self.var_count
+    def _scan_compilation_unit(self, node, _scope):
+        for unit in node[1]: self.scan_memory(unit)
+
+    def _scan_program(self, node, _scope):
+        self.scan_memory(node[2], node[1])
+
+    def _scan_function(self, node, _scope):
+        _, _type, name, params, body = node
+        self.functions[name] = params
+        # A variável de retorno tem o mesmo nome da função
+        self.var_addresses[f"{name}_{name}"] = self.var_count
+        self.var_count += 1
+        for p in params:
+            self.var_addresses[f"{name}_{p}"] = self.var_count
             self.var_count += 1
-            for p in params:
-                self.var_addresses[f"{func_name}_{p}"] = self.var_count
-                self.var_count += 1
-            self.scan_memory(stmts, func_name)
+        self.scan_memory(body, name)
 
-        elif t == 'subroutine':
-            # Subrotinas: NOME(params) + corpo
-            sub_name, params, stmts = node[1], node[2], node[3]
-            self.functions[sub_name] = params
-            for p in params:
-                self.var_addresses[f"{sub_name}_{p}"] = self.var_count
-                self.var_count += 1
-            self.scan_memory(stmts, sub_name)
+    def _scan_subroutine(self, node, _scope):
+        _, name, params, body = node
+        self.functions[name] = params
+        for p in params:
+            self.var_addresses[f"{name}_{p}"] = self.var_count
+            self.var_count += 1
+        self.scan_memory(body, name)
 
-        elif t == 'declare':
-            # Variáveis declaradas no corpo de um programa, função ou subrotina
-            for item in node[2]:
-                if item[0] == 'id':
-                    key = f"{current_scope}_{item[1]}"
-                    if key not in self.var_addresses:
-                        self.var_addresses[key] = self.var_count
-                        self.var_count += 1
-                elif item[0] == 'array':
-                    key = f"{current_scope}_{item[1]}"
-                    if key not in self.var_addresses:
-                        self.var_addresses[key] = self.var_count
-                        self.var_count += item[2]
-                        self.arrays[key] = item[2]
-        elif t in ('if', 'if_else', 'do', 'do_step', 'label'):
-            for e in node[1:]: self.scan_memory(e, current_scope)
+    def _scan_declare(self, node, scope):
+        for item in node[2]:
+            if item[0] == 'id':
+                key = f"{scope}_{item[1]}"
+                if key not in self.var_addresses:
+                    self.var_addresses[key] = self.var_count
+                    self.var_count += 1
+            elif item[0] == 'array':
+                key = f"{scope}_{item[1]}"
+                if key not in self.var_addresses:
+                    self.var_addresses[key] = self.var_count
+                    self.var_count += item[2]
+                    self.arrays[key] = item[2]
 
-    # DETEÇÃO DO PADRÃO WHILE
-    # labeled IF + GOTO N no fim do corpo → ciclo while estruturado
-    def _is_while_pattern(self, label_num, stmt):
+    def _scan_if(self, node, scope):
+        self.scan_memory(node[1], scope)
+        self.scan_memory(node[2], scope)
+
+    def _scan_if_else(self, node, scope):
+        self.scan_memory(node[1], scope)
+        self.scan_memory(node[2], scope)
+        self.scan_memory(node[3], scope)
+
+    def _scan_do(self, node, scope):
+        self.scan_memory(node[3], scope)
+        self.scan_memory(node[4], scope)
+
+    def _scan_do_step(self, node, scope):
+        self.scan_memory(node[3], scope)
+        self.scan_memory(node[4], scope)
+        self.scan_memory(node[5], scope)
+
+    def _scan_label(self, node, scope):
+        self.scan_memory(node[2], scope)
+
+    # PASSAGEM 2 — GERAÇÃO DE CÓDIGO
+    def generate(self, node, scope: str = ''):
+        if node is None: return
+        if isinstance(node, list):
+            for n in node: self.generate(n, scope)
+            return
+        if not isinstance(node, tuple): return
+
+        kind = node[0]
+        generator = getattr(self, f'_codgen_{kind}', None)
+        if generator:
+            generator(node, scope)
+
+    # Estrutura do programa
+
+    def _codgen_compilation_unit(self, node, _scope):
+        # Reserva memória global para todas as variáveis
+        for _ in range(self.var_count):
+            self._emit("pushi 0")
+
+        program = next((u for u in node[1] if u[0] == 'program'), None)
+        funcs   = [u for u in node[1] if u[0] in ('function', 'subroutine')]
+
+        self._emit("start")
+        # Inicializa arrays (alloc + storeg)
+        for arr_key, size in self.arrays.items():
+            addr = self.var_addresses[arr_key]
+            self._emit(f"alloc {size}", f"storeg {addr}")
+
+        self.generate(program)
+        self._emit("stop")
+        for f in funcs:
+            self.generate(f)
+
+    def _codgen_program(self, node, _scope):
+        self.generate(node[2], node[1])
+
+    def _codgen_function(self, node, _scope):
+        name = node[2]
+        self._emit(f"{name}:")
+        self.generate(node[4], name)
+        #if not self._last_stmt_is_return(node[3]):
+            #self._emit("return")
+
+    def _codgen_subroutine(self, node, _scope):
+        name = node[1]
+        self._emit(f"{name}:")
+        self.generate(node[3], name)
+       #if not self._last_stmt_is_return(node[3]):
+            #self._emit("return")
+
+    def _last_stmt_is_return(self, stmts) -> bool:
+        """Verifica se o último statement de um bloco é um RETURN."""
+        if not isinstance(stmts, list) or not stmts:
+            return False
+        last = stmts[-1]
+        print(f"DEBUG: Último statement: {last}")
+        if isinstance(last, tuple):
+            return last[0] == 'return'
+        return False
+
+    # Declarações (apenas registadas no scan, não geram código)
+
+    def _codgen_declare(self, node, scope): pass
+    def _codgen_continue(self, node, scope): pass
+    def _codgen_return(self, node, scope): self._emit("return")
+
+    # Atribuições
+
+    def _codgen_assign(self, node, scope):
+        _, var, expr = node
+        self.generate(expr, scope)
+        self._emit(f"storeg {self._addr(scope, var)}")
+
+    def _codgen_assign_array(self, node, scope):
+        _, var, idx, val = node
+        self._emit(f"pushg {self._addr(scope, var)}")
+        self.generate(idx, scope)
+        self._emit("pushi 1", "sub")
+        self.generate(val, scope)
+        self._emit("storen")
+
+    # I/O - Prints e Reads
+
+    def _codgen_print(self, node, scope):
+        for item in node[1]:
+            if isinstance(item, tuple) and item[0] == 'string':
+                txt = item[1].replace('"', '\\"')
+                self._emit(f'pushs "{txt}"', "writes")
+            elif isinstance(item, tuple) and item[0] == 'real':
+                self.generate(item, scope)
+                self._emit("writef")
+            else:
+                self.generate(item, scope)
+                self._emit("writei")
+        self._emit("writeln")
+
+    def _codgen_read(self, node, scope):
+        self._emit("read", "atoi", f"storeg {self._addr(scope, node[1])}")
+
+    def _codgen_read_array(self, node, scope):
+        _, var, idx = node
+        self._emit(f"pushg {self._addr(scope, var)}")
+        self.generate(idx, scope)
+        self._emit("pushi 1", "sub", "read", "atoi", "storen")
+
+    # Expressões
+
+    def _codgen_number(self, node, _scope):
+        self._emit(f"pushi {node[1]}")
+
+    def _codgen_real(self, node, _scope):
+        self._emit(f"pushf {node[1]}")
+
+    def _codgen_bool(self, node, _scope):
+        self._emit("pushi 1" if node[1] == '.TRUE.' else "pushi 0")
+
+    def _codgen_string(self, node, _scope):
+        txt = node[1].replace('"', '\\"')
+        self._emit(f'pushs "{txt}"')
+
+    def _codgen_id(self, node, scope):
+        self._emit(f"pushg {self._addr(scope, node[1])}")
+
+    def _codgen_uminus(self, node, scope):
+        inner = node[1]
+        if inner[0] == 'number':
+            self._emit(f"pushi {-inner[1]}")
+        elif inner[0] == 'real':
+            self._emit(f"pushf {-inner[1]}")
+        else:
+            self.generate(inner, scope)
+            self._emit("pushi -1", "mul")
+
+    def _codgen_binop(self, node, scope):
+        _, op, left, right = node
+        self.generate(left, scope)
+        self.generate(right, scope)
+        ops = {
+            '+': 'add',    '-': 'sub',    '*': 'mul',    '/': 'div',
+            '.EQ.': 'equal', '.GT.': 'sup', '.GE.': 'supeq',
+            '.LT.': 'inf',   '.LE.': 'infeq',
+        }
+        if op in ops:
+            self._emit(ops[op])
+        elif op == '.NE.':
+            self._emit("equal", "pushi 0", "equal")
+        elif op == '.AND.':
+            self._emit("mul")
+        elif op == '.OR.':
+            self._emit("add", "pushi 0", "sup")
+
+    def _codgen_not(self, node, scope):
+        self.generate(node[1], scope)
+        self._emit("pushi 0", "equal")
+
+    def _codgen_mod_call(self, node, scope):
+        self.generate(node[1], scope)
+        self.generate(node[2], scope)
+        self._emit("mod")
+
+    def _codgen_func_call(self, node, scope):
+        func_name, args = node[1], node[2]
+        arr_key = f"{scope}_{func_name}"
+        if arr_key in self.arrays:
+            # Acesso a array: NOME(índice)
+            self._emit(f"pushg {self._addr(scope, func_name)}")
+            self.generate(args[0], scope)
+            self._emit("pushi 1", "sub", "loadn")
+        else:
+            # Chamada a função: passa argumentos, chama, lê retorno
+            params = self.functions[func_name]
+            for arg in args:
+                self.generate(arg, scope)
+            for param in reversed(params):
+                self._emit(f"storeg {self._addr(func_name, param)}")
+            self._emit(f"pusha {func_name}", "call",
+                       f"pushg {self._addr(func_name, func_name)}")
+
+    def _codgen_call_stmt(self, node, scope):
+        sub_name, args = node[1], node[2]
+        params = self.functions[sub_name]
+        for arg in args:
+            self.generate(arg, scope)
+        for param in reversed(params):
+            self._emit(f"storeg {self._addr(sub_name, param)}")
+        self._emit(f"pusha {sub_name}", "call")
+
+    # Controlo de fluxo
+
+    def _codgen_if(self, node, scope):
+        end = self._new_label()
+        self.generate(node[1], scope)
+        self._emit(f"jz {end}")
+        self.generate(node[2], scope)
+        self._emit(f"{end}:")
+
+    def _codgen_if_else(self, node, scope):
+        false_lbl = self._new_label()
+        end_lbl   = self._new_label()
+        self.generate(node[1], scope)
+        self._emit(f"jz {false_lbl}")
+        self.generate(node[2], scope)
+        self._emit(f"jump {end_lbl}", f"{false_lbl}:")
+        self.generate(node[3], scope)
+        self._emit(f"{end_lbl}:")
+
+    def _codgen_goto(self, node, _scope):
+        self._emit(f"jump L{node[1]}")
+
+    def _codgen_do(self, node, scope):
+        _, lbl, var, start, end = node
+        start_lbl = self._new_label()
+        end_lbl   = self._new_label()
+        self.do_contexts[lbl] = {
+            'var': var, 'start_lbl': start_lbl,
+            'end_lbl': end_lbl, 'step': 1
+        }
+        self.generate(start, scope)
+        self._emit(f"storeg {self._addr(scope, var)}", f"{start_lbl}:",
+                   f"pushg {self._addr(scope, var)}")
+        self.generate(end, scope)
+        skip = self._new_label()
+        self._emit("sup", f"jz {skip}", f"jump {end_lbl}", f"{skip}:")
+
+    def _codgen_do_step(self, node, scope):
+        _, lbl, var, start, end, step = node
+        start_lbl = self._new_label()
+        end_lbl   = self._new_label()
+        self.do_contexts[lbl] = {
+            'var': var, 'start_lbl': start_lbl,
+            'end_lbl': end_lbl, 'step': None,
+            'step_expr': step, 'scope': scope
+        }
+        self.generate(start, scope)
+        self._emit(f"storeg {self._addr(scope, var)}", f"{start_lbl}:",
+                   f"pushg {self._addr(scope, var)}")
+        self.generate(end, scope)
+        skip = self._new_label()
+        self._emit("sup", f"jz {skip}", f"jump {end_lbl}", f"{skip}:")
+
+    # Labels: WHILE pattern + CONTINUE de DO
+
+    def _codgen_label(self, node, scope):
+        lbl_num = node[1]
+        stmt    = node[2]
+        lbl_str = f"L{lbl_num}:"
+
+        while_match = self._detect_while(lbl_num, stmt)
+        if while_match:
+            if lbl_str not in self.code:  # só gera uma vez
+                cond, body = while_match
+                end_lbl = self._new_label()
+                self._emit(lbl_str)
+                self.generate(cond, scope)
+                self._emit(f"jz {end_lbl}")
+                self.generate(body, scope)
+                self._emit(f"jump L{lbl_num}", f"{end_lbl}:")
+            # se já existe, ignora silenciosamente — MAS continua para statements seguintes
+        else:
+            self._emit(lbl_str)
+            self.generate(stmt, scope)
+            self._close_do(lbl_num, scope)
+
+    def _detect_while(self, lbl_num: int, stmt) -> tuple | None:
+        """
+        Deteção do padrão while do Fortran 77:
+            N IF (cond) THEN
+                ...corpo...
+                GOTO N      ← último statement do corpo
+            ENDIF
+        Devolve (cond, corpo_sem_goto) se detetado, None caso contrário.
+        """
         if not isinstance(stmt, tuple) or stmt[0] != 'if':
             return None
         body = stmt[2]
-        if not isinstance(body, list) or len(body) == 0:
+        if not isinstance(body, list) or not body:
             return None
         last = body[-1]
-        if isinstance(last, tuple) and last[0] == 'goto' and last[1] == label_num:
-            return (stmt[1], body[:-1])   # (condição, corpo sem goto)
+        if isinstance(last, tuple) and last[0] == 'goto' and last[1] == lbl_num:
+            return (stmt[1], body[:-1])
         return None
 
-    # PASSAGEM 2: GERAÇÃO DE CÓDIGO
-    def generate(self, node, current_scope=''):
-        if node is None: return
-        if isinstance(node, list):
-            for n in node: self.generate(n, current_scope)
+    def _close_do(self, lbl_num: int, scope: str):
+        """Fecha um ciclo DO quando encontra o label de destino."""
+        if lbl_num not in self.do_contexts:
             return
-        if not isinstance(node, tuple): return
-
-        t = node[0]
-
-        if t == 'compilation_unit':
-            # Alocar memória para todas as variáveis globais (variáveis do programa principal)
-            for _ in range(self.var_count):
-                self.code.append("pushi 0")
-
-            program_node   = next((u for u in node[1] if u[0] == 'program'), None)
-            function_nodes = [u for u in node[1] if u[0] in ('function', 'subroutine')]
-
-            self.code.append("start")
-            for arr_name, size in self.arrays.items():
-                addr = self.var_addresses[arr_name]
-                self.code.append(f"alloc {size}")
-                self.code.append(f"storeg {addr}")
-
-            self.generate(program_node)
-            self.code.append("stop")
-            for f in function_nodes:
-                self.generate(f)
-
-        elif t == 'program':
-            # Programa principal: PROGRAM NOME + corpo
-            self.generate(node[2], node[1])
-
-        elif t == 'function':
-            # Funções: FUNCTION NOME(params) + corpo + return
-            func_name = node[2]
-            self.code.append(f"{func_name}:")
-            self.generate(node[4], func_name)
-            self.code.append("return")
-
-        elif t == 'subroutine':
-            # Subrotinas: NOME(params) + corpo + return
-            sub_name = node[1]
-            self.code.append(f"{sub_name}:")
-            self.generate(node[3], sub_name)
-            self.code.append("return")
-
-        elif t == 'func_call':
-            # Chamadas a funções: NOME(args)
-            func_name, args = node[1], node[2]
-            arr_key = f"{current_scope}_{func_name}"
-            if arr_key in self.arrays:
-                # Acesso a array: NOME(índice)
-                base_addr = self.get_addr(current_scope, func_name)
-                self.code.append(f"pushg {base_addr}")
-                self.generate(args[0], current_scope)
-                self.code.append("pushi 1")
-                self.code.append("sub")
-                self.code.append("loadn")
-            else:
-                params = self.functions[func_name]
-                for arg in args:
-                    self.generate(arg, current_scope)
-                for param in reversed(params):
-                    self.code.append(f"storeg {self.get_addr(func_name, param)}")
-                self.code.append(f"pusha {func_name}")
-                self.code.append("call")
-                self.code.append(f"pushg {self.get_addr(func_name, func_name)}")
-
-        elif t == 'call_stmt':
-            # Chamadas a subrotinas: CALL NOME(args)
-            sub_name, args = node[1], node[2]
-            params = self.functions[sub_name]
-            for arg in args:
-                self.generate(arg, current_scope)
-            for param in reversed(params):
-                self.code.append(f"storeg {self.get_addr(sub_name, param)}")
-            self.code.append(f"pusha {sub_name}")
-            self.code.append("call")
-
-        elif t == 'return':
-            # Retorno de função: gera código para a expressão de retorno e depois retorna
-            self.code.append("return")
-
-        elif t == 'mod_call':
-            # Chamadas a funções intrínsecas: MOD(expr1, expr2)
-            self.generate(node[1], current_scope)
-            self.generate(node[2], current_scope)
-            self.code.append("mod")
-
-        elif t == 'assign':
-            # Atribuição a variável simples: VAR = valor
-            self.generate(node[2], current_scope)
-            self.code.append(f"storeg {self.get_addr(current_scope, node[1])}")
-
-        elif t == 'assign_array':
-            # Atribuição a array: NOME(índice) = valor
-            var_name, idx_expr, val_expr = node[1], node[2], node[3]
-            base = self.get_addr(current_scope, var_name)
-            self.code.append(f"pushg {base}")
-            self.generate(idx_expr, current_scope)
-            self.code.append("pushi 1")
-            self.code.append("sub")
-            self.generate(val_expr, current_scope)
-            self.code.append("storen")
-
-        elif t == 'id':
-            # Acesso a variável simples: pushg endereço
-            self.code.append(f"pushg {self.get_addr(current_scope, node[1])}")
-
-        elif t == 'number':
-            # Valores inteiros: pushi valor
-            self.code.append(f"pushi {node[1]}")
-
-        elif t == 'real':
-            # Valores reais: pushf valor
-            self.code.append(f"pushf {node[1]}")
-
-        elif t == 'uminus':
-            # Gerar código para o valor interno e depois multiplicar por -1
-            inner = node[1]
-            if inner[0] == 'number':
-                self.code.append(f"pushi {-inner[1]}")
-            elif inner[0] == 'real':
-                self.code.append(f"pushf {-inner[1]}")
-            else:
-                self.generate(inner, current_scope)
-                self.code.append("pushi -1")
-                self.code.append("mul")
-
-        elif t == 'bool':
-            # Valores booleanos: .TRUE. → 1, .FALSE. → 0
-            self.code.append("pushi 1" if node[1] == '.TRUE.' else "pushi 0")
-
-        elif t == 'binop':
-            # Gerar código para os operandos (sempre na ordem esquerda → direita)
-            self.generate(node[2], current_scope)
-            self.generate(node[3], current_scope)
-            op = node[1]
-            ops = {
-                '+': 'add', '-': 'sub', '*': 'mul', '/': 'div',
-                '.EQ.': 'equal', '.GT.': 'sup', '.GE.': 'supeq',
-                '.LT.': 'inf', '.LE.': 'infeq',
-            }
-            if op in ops:
-                self.code.append(ops[op])
-            elif op == '.NE.':
-                self.code.append("equal")
-                self.code.append("pushi 0")
-                self.code.append("equal")
-            elif op == '.AND.':
-                self.code.append("mul")
-            elif op == '.OR.':
-                self.code.append("add")
-                self.code.append("pushi 0")
-                self.code.append("sup")
-
-        elif t == 'not':
-            # NOT x → x == 0
-            self.generate(node[1], current_scope)
-            self.code.append("pushi 0")
-            self.code.append("equal")
-
-        elif t == 'print':
-            # node[1] é uma lista de itens a imprimir (strings literais ou expressões)
-            for item in node[1]:
-                if isinstance(item, tuple) and item[0] == 'string':
-                    # String literal — pushs + writes
-                    # Escapar aspas duplas que possam estar no texto
-                    txt = item[1].replace('"', '\\"')
-                    self.code.append(f'pushs "{txt}"')
-                    self.code.append("writes")
-                elif isinstance(item, tuple) and item[0] == 'real':
-                    self.generate(item, current_scope)
-                    self.code.append("writef")
-                else:
-                    # Expressão numérica/lógica → writei
-                    self.generate(item, current_scope)
-                    self.code.append("writei")
-            self.code.append("writeln")
-
-        elif t == 'read':
-            # Leitura para variável simples: READ *, VAR
-            self.code.append("read")
-            self.code.append("atoi")
-            self.code.append(f"storeg {self.get_addr(current_scope, node[1])}")
-
-        elif t == 'read_array':
-            # Leitura para array: NOME(índice)
-            var_name, idx_expr = node[1], node[2]
-            base = self.get_addr(current_scope, var_name)
-            self.code.append(f"pushg {base}")
-            self.generate(idx_expr, current_scope)
-            self.code.append("pushi 1")
-            self.code.append("sub")
-            self.code.append("read")
-            self.code.append("atoi")
-            self.code.append("storen")
-
-        elif t == 'if':
-            # IF sem ELSE → if (cond) then stmt ENDIF
-            end_lbl = self.new_label()
-            self.generate(node[1], current_scope)
-            self.code.append(f"jz {end_lbl}")
-            self.generate(node[2], current_scope)
-            self.code.append(f"{end_lbl}:")
-
-        elif t == 'if_else':
-            # IF com ELSE → if (cond) then stmt1 else stmt2 ENDIF
-            false_lbl = self.new_label()
-            end_lbl   = self.new_label()
-            self.generate(node[1], current_scope)
-            self.code.append(f"jz {false_lbl}")
-            self.generate(node[2], current_scope)
-            self.code.append(f"jump {end_lbl}")
-            self.code.append(f"{false_lbl}:")
-            self.generate(node[3], current_scope)
-            self.code.append(f"{end_lbl}:")
-
-        elif t == 'goto':
-            self.code.append(f"jump L{node[1]}")
-
-        # LABEL: deteção do padrão WHILE + ciclos DO
-        elif t == 'label':
-            lbl_num = node[1]
-            stmt    = node[2]
-
-            while_match = self._is_while_pattern(lbl_num, stmt)
-            if while_match and lbl_num not in self._while_labels_done:
-                # Padrão while detetado — gera ciclo estruturado
-                self._while_labels_done.add(lbl_num)
-                cond, body = while_match
-                while_end = self.new_label()
-
-                self.code.append(f"L{lbl_num}:")          # entrada do while
-                self.generate(cond, current_scope)          # avalia condição
-                self.code.append(f"jz {while_end}")         # sai se falsa
-                self.generate(body, current_scope)           # corpo sem o GOTO
-                self.code.append(f"jump L{lbl_num}")        # volta ao início
-                self.code.append(f"{while_end}:")
-
-            elif while_match and lbl_num in self._while_labels_done:
-                pass  # ignorar silenciosamente
-
-            else:
-                # Label normal (CONTINUE de DO loop ou label de GOTO simples)
-                self.code.append(f"L{lbl_num}:")
-                self.generate(stmt, current_scope)
-
-                # Fechar ciclo DO se este label for o destino
-                if lbl_num in self.do_contexts:
-                    ctx = self.do_contexts.pop(lbl_num)
-                    var = ctx['var']
-                    step_expr = ctx.get('step_expr')
-                    step_val  = ctx.get('step', 1)
-
-                    self.code.append(f"pushg {self.get_addr(current_scope, var)}")
-                    if step_expr is not None:
-                        self.generate(step_expr, ctx.get('current_scope', current_scope))
-                    else:
-                        self.code.append(f"pushi {step_val}")
-                    self.code.append("add")
-                    self.code.append(f"storeg {self.get_addr(current_scope, var)}")
-                    self.code.append(f"jump {ctx['start_lbl']}")
-                    self.code.append(f"{ctx['end_lbl']}:")
-
-        elif t == 'do':
-            lbl_num, var_name = node[1], node[2]
-            start_expr, end_expr = node[3], node[4]
-            start_lbl = self.new_label()
-            end_lbl   = self.new_label()
-
-            self.do_contexts[lbl_num] = {
-                'var': var_name, 'start_lbl': start_lbl,
-                'end_lbl': end_lbl, 'step': 1
-            }
-            self.generate(start_expr, current_scope)
-            self.code.append(f"storeg {self.get_addr(current_scope, var_name)}")
-            self.code.append(f"{start_lbl}:")
-            self.code.append(f"pushg {self.get_addr(current_scope, var_name)}")
-            self.generate(end_expr, current_scope)
-            self.code.append("sup")
-            skip_lbl = self.new_label()
-            self.code.append(f"jz {skip_lbl}")
-            self.code.append(f"jump {end_lbl}")
-            self.code.append(f"{skip_lbl}:")
-
-        elif t == 'do_step':
-            lbl_num, var_name = node[1], node[2]
-            start_expr, end_expr, step_expr = node[3], node[4], node[5]
-            start_lbl = self.new_label()
-            end_lbl   = self.new_label()
-
-            self.do_contexts[lbl_num] = {
-                'var': var_name, 'start_lbl': start_lbl,
-                'end_lbl': end_lbl, 'step': None,
-                'step_expr': step_expr, 'current_scope': current_scope
-            }
-            self.generate(start_expr, current_scope)
-            self.code.append(f"storeg {self.get_addr(current_scope, var_name)}")
-            self.code.append(f"{start_lbl}:")
-            self.code.append(f"pushg {self.get_addr(current_scope, var_name)}")
-            self.generate(end_expr, current_scope)
-            self.code.append("sup")
-            skip_lbl = self.new_label()
-            self.code.append(f"jz {skip_lbl}")
-            self.code.append(f"jump {end_lbl}")
-            self.code.append(f"{skip_lbl}:")
-
-        elif t == 'continue':
-            pass
-
-        elif t == 'string':
-            # Nó string usado fora de print (não devia acontecer, mas por segurança)
-            txt = node[1].replace('"', '\\"')
-            self.code.append(f'pushs "{txt}"')
+        ctx = self.do_contexts.pop(lbl_num)
+        var = ctx['var']
+        self._emit(f"pushg {self._addr(scope, var)}")
+        if ctx.get('step_expr') is not None:
+            self.generate(ctx['step_expr'], ctx.get('scope', scope))
+        else:
+            self._emit(f"pushi {ctx.get('step', 1)}")
+        self._emit("add", f"storeg {self._addr(scope, var)}",
+                   f"jump {ctx['start_lbl']}", f"{ctx['end_lbl']}:")

@@ -11,7 +11,7 @@
 #   3. IF estático — IF(.TRUE./.FALSE.) resolvidos em compile-time
 #   4. UMINUS em constantes — -5 → ('number', -5) directamente
 #   5. Double negation — NOT(NOT x) → x
-#   6. Negação de comparações — NOT(x .EQ. y) → x .NE. y  (elimina NOT)
+#   6. Negação de comparações — NOT(x .EQ. y) → x .NE. y  (tira o NOT)
 #   7. De Morgan — NOT(x .AND. y) → NOT(x) .OR. NOT(y)
 
 
@@ -23,8 +23,6 @@ class Otimizador:
         '.LT.': '.GE.', '.GE.': '.LT.',
         '.GT.': '.LE.', '.LE.': '.GT.',
     }
-
-    # Ponto de entrada público
 
     def optimize(self, node):
         """
@@ -151,7 +149,7 @@ class Otimizador:
 
         return ('not', inner)
 
-    # ── IF estático ───────────────────────────────────────────────────────────
+    # IF estático
 
     def _opt_if(self, node: tuple):
         _, cond, body = node

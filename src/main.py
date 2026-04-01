@@ -32,7 +32,6 @@ def compilar(codigo_fonte: str, otimizar: bool = True) -> str | None:
     # Fase 2: Análise Semântica
     sem = SemanticAnalyzer()
     sem.analyze(ast)
-    print(ast)
 
     if sem.errors:
         print("[!] Erros semânticos encontrados:")

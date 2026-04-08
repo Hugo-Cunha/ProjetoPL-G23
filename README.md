@@ -9,4 +9,4 @@
 ...
 
 ## Mais Informação
-Aceda ao [relatório](doc/Relatorio.md) do projeto para mais detalhes sobre a implementação, desafios enfrentados e soluções adotadas.
+Aceda ao [relatório](doc/Relatorio_PL.md) do projeto para mais detalhes sobre a implementação, desafios enfrentados e soluções adotadas.

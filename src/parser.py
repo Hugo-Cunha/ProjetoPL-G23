@@ -259,6 +259,24 @@ class Parser:
         '''expression : MOD LPAREN expression COMMA expression RPAREN'''
         p[0] = ('mod_call', p[3], p[5])
 
+    def p_expression_power(self, p):
+        '''expression : expression POWER expression'''
+        # Operador de exponenciação: base ** expoente
+        # Ex: X**2, 2**N, (A+B)**3
+        p[0] = ('power', p[1], p[3])
+
+    def p_expression_sqrt(self, p):
+        '''expression : SQRT LPAREN expression RPAREN'''
+        # Função intrínseca raiz quadrada: SQRT(X)
+        # Na EWVM não existe instrução nativa — expandimos para X**(1/2) via itof/sqrt
+        # Implementamos como nó ('sqrt', expr) para geração explícita no codegen
+        p[0] = ('sqrt', p[3])
+
+    def p_expression_abs(self, p):
+        '''expression : ABS LPAREN expression RPAREN'''
+        # Função intrínseca valor absoluto: ABS(X)
+        p[0] = ('abs', p[3])
+
     # ERROS
 
     def p_error(self, p):

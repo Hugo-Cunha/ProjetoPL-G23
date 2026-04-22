@@ -236,6 +236,19 @@ class SemanticAnalyzer:
     def _visit_uminus(self, node):
         self._visit(node[1])
 
+    def _visit_power(self, node):
+        """base ** expoente — verifica ambos os operandos."""
+        self._visit(node[1])
+        self._visit(node[2])
+
+    def _visit_sqrt(self, node):
+        """SQRT(expr) — verifica o argumento."""
+        self._visit(node[1])
+
+    def _visit_abs(self, node):
+        """ABS(expr) — verifica o argumento."""
+        self._visit(node[1])
+
     # Nós folha sem filhos a visitar
     def _visit_return(self, node):   pass
     def _visit_continue(self, node): pass

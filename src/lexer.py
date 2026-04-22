@@ -29,6 +29,8 @@ class Lexer:
         'FUNCTION':   'FUNCTION',
         'RETURN':     'RETURN',
         'MOD':        'MOD',
+        'SQRT':         'SQRT',
+        'ABS':          'ABS',
         'SUBROUTINE': 'SUBROUTINE',
         'CALL':       'CALL',
     }
@@ -36,7 +38,7 @@ class Lexer:
     # Lista de tokens — ao nível da classe (o PLY exige isso)
     tokens = [
         'ID', 'NUMBER', 'REAL_NUMBER',
-        'PLUS', 'MINUS', 'TIMES', 'DIVIDE', 'EQUALS',
+        'PLUS', 'MINUS', 'TIMES', 'DIVIDE', 'POWER', 'EQUALS',
         'LPAREN', 'RPAREN', 'COMMA', 'STRING',
         'TRUE', 'FALSE',
         'AND', 'OR', 'NOT',
@@ -108,6 +110,10 @@ class Lexer:
     def t_STRING(self, t):
         r"'([^']|'')*'"
         t.value = t.value[1:-1].replace("''", "'")
+        return t
+
+    def t_POWER(self, t):
+        r'\*\*'
         return t
 
     # Números — REAL_NUMBER antes de NUMBER para que o PLY tente o real primeiro

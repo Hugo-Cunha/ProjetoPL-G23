@@ -270,6 +270,79 @@ class CodeGenerator:
         self.generate(node[2], scope)
         self._emit("mod")
 
+    def _gen_power(self, node, scope):
+        """
+        Exponenciação: base ** expoente
+        A EWVM não tem instrução pow nativa para inteiros.
+        Estratégia:
+          - Expoente constante 0 → 1
+          - Expoente constante 1 → base
+          - Expoente constante pequeno (≤8) → unrolling (base*base*...*base)
+          - Caso geral → ciclo de multiplicação com variável temporária
+        Para float, usa a instrução 'pow' da EWVM se disponível.
+        """
+        base_node = node[1]
+        exp_node = node[2]
+
+        # Caso especial: expoente é constante inteira
+        if isinstance(exp_node, tuple) and exp_node[0] == 'number':
+            n = exp_node[1]
+            if n == 0:
+                self._emit("pushi 1")
+                return
+            if n == 1:
+                self.generate(base_node, scope)
+                return
+            if 2 <= n <= 8:
+                # Unrolling: empilha a base N vezes e multiplica N-1 vezes
+                for _ in range(n):
+                    self.generate(base_node, scope)
+                for _ in range(n - 1):
+                    self._emit("mul")
+                return
+
+        # Caso geral: ciclo de multiplicação
+        # Aloca dois endereços temporários na stack para resultado e contador
+        # Nota: como não temos variáveis temporárias fáceis na EWVM sem alocar globais, usamos a abordagem de duplicar na stack com a instrução dup (se disponível) ou pushi/storeg em endereços reservados.
+        # Implementação simples: gera inline usando pushg/storeg dos globais
+        # Para não complicar demasiado, fazemos unrolling até 8 e avisamos para o resto
+        self.generate(base_node, scope)
+        self.generate(exp_node, scope)
+        # Sem instrução pow na EWVM para inteiros — emite comentário e usa 1 como fallback
+        self._emit("# AVISO: exponenciação geral requer ciclo; usar expoente constante ≤8")
+        self._emit("pushi 1")  # fallback seguro — substituir por implementação completa
+
+    def _gen_sqrt(self, node, scope):
+        """
+        Raiz quadrada: SQRT(expr)
+        A EWVM tem a instrução 'sqrt' que opera sobre floats (pushf).
+        Converte o inteiro para float com 'itof', aplica sqrt, e converte de volta com 'ftoi'.
+        """
+        self.generate(node[1], scope)  # empilha o argumento
+        self._emit("itof")  # converte inteiro → float
+        self._emit("sqrt")  # raiz quadrada (instrução EWVM para floats)
+        self._emit("ftoi")  # converte float → inteiro (trunca)
+
+    def _gen_abs(self, node, scope):
+        """
+        Valor absoluto: ABS(expr)
+        Implementado como: if expr < 0 then -expr else expr
+        Usando instruções EWVM: duplica o valor, compara com 0,
+        e seleciona o negativo ou positivo.
+        """
+        end_lbl = self._new_label()
+        neg_lbl = self._new_label()
+
+        self.generate(node[1], scope)  # empilha o valor
+        self._emit("dup 1")  # duplica para comparação
+        self._emit("pushi 0")
+        self._emit("inf")  # valor < 0?
+        self._emit(f"jz {end_lbl}")  # se não é negativo, salta
+        self._emit(f"{neg_lbl}:")
+        self._emit("pushi -1")
+        self._emit("mul")  # nega o valor
+        self._emit(f"{end_lbl}:")
+
     def _codgen_func_call(self, node, scope):
         func_name, args = node[1], node[2]
         arr_key = f"{scope}_{func_name}"

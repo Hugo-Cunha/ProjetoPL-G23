@@ -13,6 +13,7 @@
 #   5. Double negation — NOT(NOT x) → x
 #   6. Negação de comparações — NOT(x .EQ. y) → x .NE. y  (tira o NOT)
 #   7. De Morgan — NOT(x .AND. y) → NOT(x) .OR. NOT(y)
+#  8. Power/SQRT/ABS constantes — POWER(2,3) → 8, SQRT(16) → 4, etc.
 
 
 class Otimizador:
@@ -113,6 +114,31 @@ class Otimizador:
         elif op == '/':
             if right == one:  return left
         return None
+
+    # Expressões  Especiais   SQRT POWER ABS
+
+    def _opt_power(self, node: tuple):
+        """Constant folding para exponenciação com expoente constante."""
+        base = self.optimize(node[1])
+        exp = self.optimize(node[2])
+        if base[0] == 'number' and exp[0] == 'number' and exp[1] >= 0:
+            return ('number', base[1] ** exp[1])
+        return ('power', base, exp)
+
+    def _opt_sqrt(self, node: tuple):
+        """Constant folding para SQRT com argumento constante."""
+        inner = self.optimize(node[1])
+        if inner[0] == 'number' and inner[1] >= 0:
+            import math
+            return ('number', int(math.sqrt(inner[1])))
+        return ('sqrt', inner)
+
+    def _opt_abs(self, node: tuple):
+        """Constant folding para ABS com argumento constante."""
+        inner = self.optimize(node[1])
+        if inner[0] == 'number':
+            return ('number', abs(inner[1]))
+        return ('abs', inner)
 
     # Minus Unário
 

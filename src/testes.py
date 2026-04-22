@@ -68,9 +68,47 @@ def correr_pasta(pasta: str):
         correr_ficheiro(os.path.join(pasta, nome))
 
 
+# =============================================================================
 # TESTES INLINE (não precisam de ficheiros externos)
+# =============================================================================
 
 TESTES = {
+    "Exponenciação (**)": (
+        """
+PROGRAM POTENCIA
+INTEGER X, Y, Z
+X = 2
+Y = X**3
+Z = 2**8
+PRINT *, Y
+PRINT *, Z
+END
+""",
+        "X**3 → unrolling (X*X*X); 2**8 → constant folding → 256"
+    ),
+    "Raiz quadrada (SQRT)": (
+        """
+PROGRAM RAIZ
+INTEGER X, Y
+X = 16
+Y = SQRT(X)
+PRINT *, Y
+END
+""",
+        "SQRT(16) → itof, sqrt, ftoi → 4"
+    ),
+    "Valor absoluto (ABS)": (
+        """
+PROGRAM ABSVAL
+INTEGER X, Y
+X = -7
+Y = ABS(X)
+PRINT *, Y
+END
+""",
+        "ABS(-7) → comparação com 0 e negação condicional → 7"
+    ),
+
     "Constant Folding": (
         '''
 PROGRAM CONSTFOLD

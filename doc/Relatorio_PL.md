@@ -220,7 +220,101 @@ Este teste ilustra a atuação do *Constant Folding*, que resolve operações en
 ![](photos/Figura7.png)
 ***Figura 7:** Métricas do teste feito na figura 6.*
 
-# **9\. Limitações Conhecidas**
+# **9\. Instruções de Utilização**
+ 
+Esta secção descreve como instalar as dependências, executar o compilador e adicionar novos programas de teste. Uma versão mais detalhada encontra-se também no ficheiro `src/README.md` incluído no repositório.
+ 
+## **9.1 Pré-requisitos**
+ 
+O compilador requer **Python 3.10 ou superior** e a biblioteca **PLY**. Para instalar:
+ 
+```bash
+pip install ply
+```
+ 
+## **9.2 Estrutura do Repositório**
+ 
+```
+ProjetoPL-G23/
+├── src/
+│   ├── main.py          # Ponto de entrada do compilador
+│   ├── lexer.py         # Análise léxica
+│   ├── parser.py        # Análise sintática
+│   ├── semantic.py      # Análise semântica
+│   ├── otimizador.py    # Otimizações sobre a AST
+│   ├── codegen.py       # Geração de código EWVM
+│   ├── testes.py        # Suite de testes com métricas
+│   ├── README.md        # Instruções detalhadas de uso
+│   └── output/          # Criada automaticamente — contém os ficheiros .vm gerados
+├── testes/
+│   ├── exemplo1.f       # Olá Mundo
+│   ├── exemplo2.f       # Fatorial
+│   ├── exemplo3.f       # Número primo
+│   ├── exemplo4.f       # Soma de array
+│   └── exemplo5.f       # Conversor de bases (com função)
+└── doc/
+    └── Relatorio_PL.md  # Este documento
+```
+ 
+Todos os comandos abaixo devem ser executados **dentro da pasta `src/`**:
+ 
+```bash
+cd src/
+```
+ 
+## **9.3 Compilar um Ficheiro Fortran**
+ 
+Para compilar um ficheiro `.f` e imprimir o código EWVM resultante no terminal:
+ 
+```bash
+python main.py ../testes/exemplo1.f
+```
+ 
+## **9.4 Compilar Todos os Exemplos de Uma Vez**
+ 
+Executar o compilador sem argumentos percorre automaticamente todos os ficheiros `.f` da pasta `../testes/`, compila cada um e guarda os resultados na pasta `src/output/`:
+ 
+```bash
+python main.py
+```
+ 
+Os ficheiros gerados ficam com o nome `output_1.vm`, `output_2.vm`, etc., correspondendo à ordem alfabética dos ficheiros de teste. A pasta `output/` é criada automaticamente se não existir.
+ 
+## **9.5 Correr a Suite de Testes com Métricas**
+ 
+Para executar os testes comparativos (com e sem otimização) e obter as métricas de poupança de instruções:
+ 
+```bash
+python testes.py
+```
+ 
+## **9.6 Adicionar um Novo Programa de Teste**
+ 
+Para testar um novo programa Fortran com o compilador, basta seguir estes passos:
+ 
+**Passo 1 — Criar o ficheiro Fortran.** Escrever o programa num ficheiro com extensão `.f`. Por exemplo, criar o ficheiro `testes/meu_programa.f`:
+ 
+```fortran
+PROGRAM EXEMPLO
+  INTEGER N
+  READ *, N
+  PRINT *, N
+END
+```
+ 
+**Passo 2 — Compilar e verificar o output.** A partir da pasta `src/`, compilar o novo ficheiro e guardar o resultado:
+ 
+```bash
+python main.py ../testes/meu_programa.f 
+```
+ 
+Se existirem erros léxicos, sintáticos ou semânticos, o compilador imprime mensagens de diagnóstico indicando a linha e o problema encontrado.
+ 
+**Passo 3 — Executar na EWVM.** O ficheiro `.vm` gerado pode ser carregado diretamente na máquina virtual EWVM disponível em [https://ewvm.epl.di.uminho.pt](https://ewvm.epl.di.uminho.pt) para verificar a corretude da execução.
+ 
+**Passo 4 — Incluir nos testes automáticos (opcional).** Para que o novo ficheiro seja incluído na compilação em lote (via `python main.py` sem argumentos) e nas métricas do `testes.py`, basta colocá-lo na pasta `testes/` com extensão `.f`. Ambas as ferramentas percorrem essa pasta automaticamente.
+
+# **10\. Limitações Conhecidas**
 
 Embora o compilador cumpra os requisitos propostos e inclua mecanismos de otimização, a enorme abrangência do standard do Fortran 77 resulta em algumas limitações nesta versão:
 
@@ -231,6 +325,6 @@ Embora o compilador cumpra os requisitos propostos e inclua mecanismos de otimiz
 * **Exponenciação Geral:** O operador `**` com expoentes variáveis (ex: `X**N` onde N é lido em tempo de execução) emite uma instrução de aviso mas não computa o resultado correto. O suporte completo está limitado a expoentes constantes até 8 (unrolling) ou a avaliação em compile-time pelo otimizador.
 * **Funções Intrínsecas Limitadas:** Apenas `MOD`, `SQRT` e `ABS` estão implementadas. Funções como `SIN`, `COS`, `EXP`, `LOG` e `INT` não estão disponíveis.
 
-# **10\. Conclusão**
+# **11\. Conclusão**
 
 O desenvolvimento deste compilador de Fortran 77 revelou-se um desafio extremamente enriquecedor e multidisciplinar. Para além de consolidar os conceitos lecionados sobre análise léxica, sintática e semântica, obrigou o grupo a lidar com construções legacy e paradigmas antigos de programação. O resultado é um sistema funcional, modular e otimizado que cumpre plenamente os requisitos iniciais e estende a sua utilidade com a implementação dos níveis de valorização exigidos.

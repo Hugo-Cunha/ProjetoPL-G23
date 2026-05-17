@@ -1,8 +1,6 @@
 # main.py — Ponto de entrada do compilador Fortran 77 → EWVM
 #
 # Uso:
-#   python main.py ficheiro.f          → compila e imprime o código VM
-#   python main.py ficheiro.f -o out   → guarda o código VM em 'out'
 #   python main.py                     → corre os exemplos internos
 
 import sys
@@ -84,22 +82,35 @@ def _cli():
 
 
 def _demo():
-    """Compila os exemplos da pasta testes/ se existirem, senão usa exemplos inline."""
+    """Compila os exemplos da pasta testes/ e guarda-os na pasta output."""
     testes_dir = os.path.join(os.path.dirname(__file__), '..', 'testes')
-    ficheiros  = sorted(f for f in os.listdir(testes_dir) if f.endswith('.f')) \
-                 if os.path.isdir(testes_dir) else []
+
+    # 1. Definir e criar a pasta 'output' se ela não existir
+    output_dir = os.path.join(os.path.dirname(__file__), 'output')
+    os.makedirs(output_dir, exist_ok=True)
+
+    ficheiros = sorted(f for f in os.listdir(testes_dir) if f.endswith('.f')) \
+        if os.path.isdir(testes_dir) else []
 
     if ficheiros:
-        for nome in ficheiros:
+        # Contador para o número do exemplo
+        for i, nome in enumerate(ficheiros, start=1):
             caminho = os.path.join(testes_dir, nome)
-            print(f"\n{'='*60}")
-            print(f"  {nome}")
-            print('='*60)
+            print(f"A compilar {nome}...")
+
             vm = compilar_ficheiro(caminho)
             if vm:
-                print(vm)
+                # 2. Gerar o nome do ficheiro (ex: output_exemplo1.f)
+                nome_saida = f"output_{nome}.vm"
+                caminho_saida = os.path.join(output_dir, nome_saida)
+
+                # 3. Gravar o código gerado no ficheiro de output
+                with open(caminho_saida, 'w', encoding='utf-8') as f:
+                    f.write(vm)
+                print(f"  -> Guardado em: {caminho_saida}")
+        print(f"\n[+] Sucesso! Todos os outputs foram guardados na pasta '{output_dir}'.")
     else:
-        print("Sem ficheiros de teste. Usa: python main.py ficheiro.f")
+        print("Sem ficheiros de teste na pasta '../testes'. Usa: python main.py ficheiro.f")
 
 
 if __name__ == '__main__':
